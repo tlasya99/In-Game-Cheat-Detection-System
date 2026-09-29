@@ -89,6 +89,25 @@ m2.metric("High risk (70%+)", f"{high_risk_count:,}")
 m3.metric("Awaiting review", f"{unreviewed_count:,}")
 m4.metric("Confirmed by moderators", f"{confirmed_count:,}")
 
+st.subheader("Session risk overview")
+risk_bands = ["0–49%", "50–69%", "70–84%", "85–100%"]
+sessions["risk_band"] = pd.cut(
+    sessions["risk_score"],
+    bins=[0, 0.5, 0.7, 0.85, 1.000001],
+    labels=risk_bands,
+    right=False,
+    include_lowest=True,
+)
+risk_counts = (
+    sessions["risk_band"]
+    .value_counts()
+    .reindex(risk_bands, fill_value=0)
+    .rename_axis("Average risk range")
+    .to_frame("Sessions")
+)
+st.bar_chart(risk_counts, y_label="Number of sessions")
+st.caption("Bars count sessions by average model risk score. Risk scores are review signals, not confirmation of cheating.")
+
 st.subheader("Review queue")
 f1, f2 = st.columns([1, 1])
 minimum_risk = f1.slider("Minimum risk score", min_value=0, max_value=100, value=50, step=5)
