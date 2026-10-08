@@ -100,6 +100,23 @@ feature_labels = {
     "new_sequence": "Starts a new sequence",
 }
 
+
+@st.dialog("Prediction result")
+def show_prediction_result(risk_score: float) -> None:
+    risk_percent = risk_score * 100
+    st.metric("Estimated cheat risk", f"{risk_percent:.1f}%")
+    st.progress(risk_score)
+    if risk_score >= 0.85:
+        st.error("High model risk — prioritize this event for human review.")
+    elif risk_score >= 0.70:
+        st.warning("Elevated model risk — review the gameplay evidence.")
+    elif risk_score >= 0.50:
+        st.info("Moderate model risk — consider reviewing with other evidence.")
+    else:
+        st.success("Low model risk — the model found fewer suspicious patterns in these inputs.")
+    st.caption("This is a model estimate for one event, not proof of cheating or a moderation decision.")
+
+
 with st.form("manual_prediction_form"):
     st.caption("Fields start with typical dataset values. Replace them with the gameplay values you want to check.")
     input_columns = st.columns(3)
@@ -129,22 +146,4 @@ with st.form("manual_prediction_form"):
 if predict_clicked:
     prediction_row = pd.DataFrame([[input_values[name] for name in model_features]], columns=list(model_features))
     risk_score = float(model_bundle["model"].predict_proba(prediction_row)[:, 1][0])
-    risk_percent = risk_score * 100
-
-    st.markdown("#### Prediction result")
-    result_col, detail_col = st.columns([1, 2])
-    result_col.metric("Estimated cheat risk", f"{risk_percent:.1f}%")
-    result_col.progress(risk_score)
-    if risk_score >= 0.85:
-        detail_col.error("High model risk — prioritize this event for human review.")
-    elif risk_score >= 0.70:
-        detail_col.warning("Elevated model risk — review the gameplay evidence.")
-    elif risk_score >= 0.50:
-        detail_col.info("Moderate model risk — consider reviewing with other evidence.")
-    else:
-        detail_col.success("Low model risk — the model found fewer suspicious patterns in these inputs.")
-    st.caption("This is a model estimate for one event, not proof of cheating or a moderator decision.")
-
-with st.expander("About this dashboard"):
-    st.write("The form predicts risk for one gameplay event using the saved classifier. Field defaults come from the dataset and can be edited before prediction.")
-    st.write("The score is an estimate, not proof of cheating or a moderation decision. This prototype uses synthetic data, so results need validation with real gameplay data.")
+    show_prediction_result(risk_score)
