@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_PATH = ROOT / "final_dataset.csv"
 MODEL_PATH = ROOT / "cheat_detection_model.joblib"
 
-st.set_page_config(page_title="Cheat Risk Predictor", page_icon="🎮", layout="wide")
+st.set_page_config(page_title="Gameplay Risk Assessment", page_icon="🎮", layout="wide")
 
 
 @st.cache_data
@@ -56,8 +56,8 @@ def load_feature_defaults(data_path: str, features: tuple) -> dict:
     return defaults
 
 
-st.title("Cheat Risk Predictor")
-st.caption("Enter gameplay statistics to estimate the model's risk score for one gameplay event.")
+st.title("Gameplay Risk Assessment")
+st.caption("A machine-learning assisted tool for estimating suspicious gameplay patterns from event statistics.")
 
 try:
     sessions = load_scored_sessions(str(DATA_PATH), str(MODEL_PATH))
@@ -66,13 +66,17 @@ except Exception as exc:
     st.stop()
 
 high_risk_count = int((sessions["risk_score"] >= 0.7).sum())
+event_count = int(sessions["events"].sum())
 
-m1, m2 = st.columns(2)
-m1.metric("Sessions", f"{len(sessions):,}")
-m2.metric("High risk (70%+)", f"{high_risk_count:,}")
+m1, m2, m3 = st.columns(3)
+m1.metric("Sessions analyzed", f"{len(sessions):,}")
+m2.metric("Gameplay events", f"{event_count:,}")
+m3.metric("Elevated session scores", f"{high_risk_count:,}", help="Sessions with an average model score of 70% or higher.")
+st.caption("Session counts summarize the supplied dataset. A model score is an estimate, not a finding of cheating.")
 
-st.subheader("Try a prediction")
-st.caption("Enter one gameplay event. The model returns an event-level risk score; it does not make a moderation decision.")
+st.divider()
+st.subheader("Assess one gameplay event")
+st.caption("Enter the event statistics below, then run the model to view its estimated risk score.")
 
 try:
     model_bundle = load_model_bundle(str(MODEL_PATH))
@@ -101,47 +105,70 @@ feature_labels = {
 }
 
 
-@st.dialog("Prediction result")
+@st.dialog("Gameplay risk result")
 def show_prediction_result(risk_score: float) -> None:
     risk_percent = risk_score * 100
-    st.metric("Estimated cheat risk", f"{risk_percent:.1f}%")
-    st.progress(risk_score)
+    score_column, explanation_column = st.columns([1, 2])
+    score_column.metric("Estimated risk", f"{risk_percent:.1f}%")
+    score_column.progress(risk_score, text="Model score")
     if risk_score >= 0.85:
-        st.error("High model risk — prioritize this event for human review.")
+        explanation_column.error("High risk score")
+        explanation_column.write("The model found patterns that are uncommon in the legitimate examples. Review the gameplay evidence carefully.")
     elif risk_score >= 0.70:
-        st.warning("Elevated model risk — review the gameplay evidence.")
+        explanation_column.warning("Elevated risk score")
+        explanation_column.write("Consider checking this event alongside other gameplay evidence.")
     elif risk_score >= 0.50:
-        st.info("Moderate model risk — consider reviewing with other evidence.")
+        explanation_column.info("Moderate risk score")
+        explanation_column.write("The model found some patterns worth considering, but this score alone is inconclusive.")
     else:
-        st.success("Low model risk — the model found fewer suspicious patterns in these inputs.")
-    st.caption("This is a model estimate for one event, not proof of cheating or a moderation decision.")
+        explanation_column.success("Lower risk score")
+        explanation_column.write("The model found fewer suspicious patterns in these inputs.")
+    st.divider()
+    st.caption("This is an event-level model estimate, not proof of cheating or a moderation decision.")
 
 
 with st.form("manual_prediction_form"):
-    st.caption("Fields start with typical dataset values. Replace them with the gameplay values you want to check.")
-    input_columns = st.columns(3)
+    st.caption("Fields are prefilled with typical values from the dataset. Replace them with the event you want to assess.")
     input_values = {}
-    for index, feature in enumerate(model_features):
-        label = feature_labels.get(feature, feature.replace("_", " ").title())
-        with input_columns[index % len(input_columns)]:
-            if feature == "new_sequence":
-                input_values[feature] = st.checkbox(label, value=feature_defaults[feature])
-            elif feature == "time":
-                input_values[feature] = st.number_input(
-                    label,
-                    value=int(feature_defaults[feature]),
-                    step=1000,
-                    format="%d",
-                    help="Enter the event timestamp in milliseconds, matching the dataset format.",
-                )
-            else:
-                input_values[feature] = st.number_input(
-                    label,
-                    value=feature_defaults[feature],
-                    step=0.1,
-                    format="%.4f",
-                )
-    predict_clicked = st.form_submit_button("Predict risk", type="primary", use_container_width=True)
+    field_groups = [
+        ("Aim and movement", ["yaw", "pitch", "delta_yaw", "delta_pitch", "accel_yaw", "accel_pitch"]),
+        ("Target and player position", ["target_x", "target_y", "target_z", "position_x", "position_y", "position_z"]),
+        ("Session details", ["sensitivity", "time", "new_sequence"]),
+    ]
+    grouped_features = {feature for _, features in field_groups for feature in features}
+    additional_features = [feature for feature in model_features if feature not in grouped_features]
+    if additional_features:
+        field_groups.append(("Additional model inputs", additional_features))
+
+    for group_name, group_features in field_groups:
+        group_features = [feature for feature in group_features if feature in model_features]
+        if not group_features:
+            continue
+        with st.container(border=True):
+            st.markdown(f"#### {group_name}")
+            for start in range(0, len(group_features), 2):
+                input_columns = st.columns(2)
+                for column, feature in zip(input_columns, group_features[start:start + 2]):
+                    label = feature_labels.get(feature, feature.replace("_", " ").title())
+                    with column:
+                        if feature == "new_sequence":
+                            input_values[feature] = st.checkbox(label, value=feature_defaults[feature])
+                        elif feature == "time":
+                            input_values[feature] = st.number_input(
+                                label,
+                                value=int(feature_defaults[feature]),
+                                step=1000,
+                                format="%d",
+                                help="Enter the event timestamp in milliseconds, matching the dataset format.",
+                            )
+                        else:
+                            input_values[feature] = st.number_input(
+                                label,
+                                value=feature_defaults[feature],
+                                step=0.1,
+                                format="%.4f",
+                            )
+    predict_clicked = st.form_submit_button("Run risk assessment", type="primary", use_container_width=True)
 
 if predict_clicked:
     prediction_row = pd.DataFrame([[input_values[name] for name in model_features]], columns=list(model_features))
