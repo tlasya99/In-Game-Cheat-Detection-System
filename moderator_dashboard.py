@@ -74,10 +74,6 @@ m2.metric("Gameplay events", f"{event_count:,}")
 m3.metric("Elevated session scores", f"{high_risk_count:,}", help="Sessions with an average model score of 70% or higher.")
 st.caption("Session counts summarize the supplied dataset. A model score is an estimate, not a finding of cheating.")
 
-st.divider()
-st.subheader("Assess one gameplay event")
-st.caption("Enter the event statistics below, then run the model to view its estimated risk score.")
-
 try:
     model_bundle = load_model_bundle(str(MODEL_PATH))
     model_features = tuple(model_bundle["features"])
@@ -103,6 +99,95 @@ feature_labels = {
     "time": "Event time (Unix milliseconds)",
     "new_sequence": "Starts a new sequence",
 }
+
+st.divider()
+st.subheader("Assess multiple players")
+st.caption("Upload gameplay events for several players. The model scores each event and then ranks players by their average score.")
+
+with st.container(border=True):
+    template_rows = [
+        {"player_id": f"player_{number:03d}", **feature_defaults}
+        for number in range(1, 4)
+    ]
+    template_csv = pd.DataFrame(template_rows, columns=["player_id", *model_features]).to_csv(index=False)
+    st.download_button(
+        "Download CSV template",
+        data=template_csv.encode("utf-8"),
+        file_name="player_gameplay_template.csv",
+        mime="text/csv",
+        help="The template contains example IDs and typical starting values. Replace them with actual gameplay data.",
+    )
+    st.caption("Each row must contain a player_id (or uuid) and all gameplay feature columns from the template. An ID alone cannot be scored.")
+    uploaded_players = st.file_uploader("Upload gameplay events CSV", type=["csv"], key="multiple_player_upload")
+
+if uploaded_players is not None:
+    try:
+        batch = pd.read_csv(uploaded_players)
+        id_column = "player_id" if "player_id" in batch.columns else "uuid" if "uuid" in batch.columns else None
+        if id_column is None:
+            st.error("The CSV needs a player_id or uuid column to identify each player.")
+        else:
+            missing_features = [feature for feature in model_features if feature not in batch.columns]
+            if missing_features:
+                st.error(f"The CSV is missing model fields: {', '.join(missing_features)}. Download the template to see all required columns.")
+            else:
+                player_ids = batch[id_column].astype("string").str.strip()
+                if player_ids.isna().any() or player_ids.eq("").any():
+                    st.error("Every gameplay row must have a non-empty player ID.")
+                else:
+                    event_features = batch[list(model_features)].copy()
+                    invalid_values = []
+                    for feature in model_features:
+                        if feature == "new_sequence":
+                            normalized = event_features[feature].astype(str).str.strip().str.lower()
+                            converted = normalized.map({"true": True, "false": False, "1": True, "0": False})
+                            if converted.isna().any():
+                                invalid_values.append(feature)
+                            else:
+                                event_features[feature] = converted
+                        else:
+                            converted = pd.to_numeric(event_features[feature], errors="coerce")
+                            if converted.isna().any():
+                                invalid_values.append(feature)
+                            else:
+                                event_features[feature] = converted
+
+                    if invalid_values:
+                        st.error(f"Some values are missing or invalid in: {', '.join(invalid_values)}.")
+                    else:
+                        event_scores = model_bundle["model"].predict_proba(event_features[list(model_features)])[:, 1]
+                        scored_events = pd.DataFrame({"Player ID": player_ids, "Risk score": event_scores})
+                        player_report = scored_events.groupby("Player ID", as_index=False).agg(
+                            Events=("Risk score", "size"),
+                            average_score=("Risk score", "mean"),
+                            peak_score=("Risk score", "max"),
+                        )
+                        player_report["Average risk (%)"] = (player_report["average_score"] * 100).round(1)
+                        player_report["Peak risk (%)"] = (player_report["peak_score"] * 100).round(1)
+                        player_report["Risk category"] = player_report["average_score"].map(
+                            lambda score: "High" if score >= 0.85 else "Elevated" if score >= 0.70 else "Moderate" if score >= 0.50 else "Low"
+                        )
+                        player_report = player_report.sort_values("average_score", ascending=False)
+                        display_report = player_report[["Player ID", "Events", "Average risk (%)", "Peak risk (%)", "Risk category"]]
+
+                        st.markdown("#### Player risk results")
+                        result_one, result_two = st.columns(2)
+                        result_one.metric("Players scored", f"{len(player_report):,}")
+                        result_two.metric("Gameplay events scored", f"{len(scored_events):,}")
+                        st.dataframe(display_report, hide_index=True, use_container_width=True)
+                        st.download_button(
+                            "Download player risk report",
+                            data=display_report.to_csv(index=False).encode("utf-8"),
+                            file_name="player_risk_report.csv",
+                            mime="text/csv",
+                        )
+                        st.caption("Players are ranked by average event score. High or elevated scores are candidates for review, not confirmed cheating.")
+    except Exception as exc:
+        st.error(f"Could not read or score this CSV: {exc}")
+
+st.divider()
+st.subheader("Assess one gameplay event")
+st.caption("For a single event, enter its gameplay statistics below to view an individual risk estimate.")
 
 
 @st.dialog("Gameplay risk result")
